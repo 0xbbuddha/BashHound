@@ -9,7 +9,7 @@
   [![BashHound](https://img.shields.io/badge/Tool-BashHound-00E68E.svg)](https://github.com/0xbbuddha/BashHound)
 
 
-  *Cross-platform • Fast • Stealth*
+  *Bash • Fast • Stealth*
 
 </div>
 
