@@ -55,9 +55,11 @@ All tests were carried out on the DarkZero machine on Hack The Box. “TODO” n
 
 ---
 
-## License
+<div style="border: 2px solid red; padding: 10px; border-radius: 8px;">
+  <strong>⚠️ Disclaimer:</strong><br><br>
+  All tests were carried out on the DarkZero machine on Hack The Box. “TODO” notes have been added to the code to make it compatible with any server.
+</div>
 
-This project is licensed under the MIT License. See the [COPYING](./COPYING) file for details.
 
 ## Related Projects
 
