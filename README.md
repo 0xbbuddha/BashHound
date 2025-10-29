@@ -51,15 +51,11 @@ Collection Methods:
 
 ## Disclaimer
 
-All tests were carried out on the DarkZero machine on Hack The Box. “TODO” notes have been added to the code to make it compatible with any server.
-
----
-
-<div style="border: 2px solid red; padding: 10px; border-radius: 8px;">
-  <strong>⚠️ Disclaimer:</strong><br><br>
+<div style="border: 2px solid red; background-color: #ffe6e6; padding: 10px; border-radius: 8px;">
   All tests were carried out on the DarkZero machine on Hack The Box. “TODO” notes have been added to the code to make it compatible with any server.
 </div>
 
+---
 
 ## Related Projects
 
