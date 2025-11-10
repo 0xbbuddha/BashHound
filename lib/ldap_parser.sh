@@ -15,7 +15,7 @@ parse_ldap_search_entry() {
     
     local dn=""
     local attributes=()
-    
+
     extract_attribute "$hex_data" "distinguishedName" "dn"
     extract_attribute "$hex_data" "sAMAccountName" "sam"
     extract_attribute "$hex_data" "objectSid" "sid"
@@ -35,7 +35,7 @@ extract_attribute() {
     local output_var="$3"
     
     local attr_hex=$(printf '%s' "$attr_name" | xxd -p | tr -d '\n')
-    
+
     if [[ "$hex_data" =~ 04[0-9a-f]{2}$attr_hex ]]; then
         return 0
     fi
@@ -86,7 +86,7 @@ extract_dn_from_response() {
 extract_sam_from_response() {
     local hex="$1"
     
-    local sam_attr_hex="73414d4163636f756en744e616d65"
+    local sam_attr_hex="73414d4163636f756e744e616d65"
     
     if [[ "$hex" =~ ${sam_attr_hex}3184[0-9a-f]{8}04([0-9a-f]{2})([0-9a-f]+) ]]; then
         local val_len_hex="${BASH_REMATCH[1]}"
@@ -168,7 +168,7 @@ convert_sid_hex_to_string() {
         echo ""
         return
     fi
-    
+
     local revision=$((16#${sid_hex:0:2}))
     local sub_count=$((16#${sid_hex:2:2}))
     
@@ -401,7 +401,7 @@ extract_filetime_timestamp() {
 extract_uac_flags() {
     local hex="$1"
     
-    local attr_hex="757365724163636f756e74436f6e74726f6c"
+    local attr_hex="757365724163636f756en74436f6e74726f6c"
     
     if [[ "$hex" =~ ${attr_hex}31[0-9a-f]{2}02([0-9a-f]{2})([0-9a-f]+) ]]; then
         local int_len_hex="${BASH_REMATCH[1]}"

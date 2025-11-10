@@ -42,6 +42,52 @@ asn1_encode_length() {
     fi
 }
 
+asn1_encode_octet_string_hex() {
+    local hex_value="$1"
+    local length=$((${#hex_value} / 2))
+    local length_encoded=$(asn1_encode_length "$length")
+    printf '04%s%s' "$length_encoded" "$hex_value"
+}
+
+asn1_encode_oid() {
+    local oid="$1"
+    
+    IFS='.' read -ra parts <<< "$oid"
+    
+    local first_byte=$(( 40 * ${parts[0]} + ${parts[1]} ))
+    local hex_result=$(printf '%02x' "$first_byte")
+    
+    for ((i=2; i<${#parts[@]}; i++)); do
+        local num=${parts[i]}
+        local encoded=""
+        
+        if [ $num -lt 128 ]; then
+            encoded=$(printf '%02x' "$num")
+        else
+            local bytes=()
+            while [ $num -gt 0 ]; do
+                bytes=($((num & 0x7f)) "${bytes[@]}")
+                num=$((num >> 7))
+            done
+            
+            for ((j=0; j<${#bytes[@]}; j++)); do
+                local byte=${bytes[j]}
+                if [ $j -lt $((${#bytes[@]} - 1)) ]; then
+                    byte=$((byte | 0x80))
+                fi
+                encoded+=$(printf '%02x' "$byte")
+            done
+        fi
+        
+        hex_result+="$encoded"
+    done
+    
+    local length=$((${#hex_result} / 2))
+    printf '06'
+    asn1_encode_length "$length"
+    printf '%s' "$hex_result"
+}
+
 asn1_encode_integer() {
     local value=$1
     local hex_value=$(printf '%x' "$value")

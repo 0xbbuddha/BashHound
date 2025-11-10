@@ -5,6 +5,71 @@ readonly _EXPORT_SH_LOADED=1
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+resolve_principal_type() {
+    local principal_sid="$1"
+    
+    local users_file="/tmp/bashhound_users_$$"
+    local groups_file="/tmp/bashhound_groups_$$"
+    local computers_file="/tmp/bashhound_computers_$$"
+    
+    if [ -f "$users_file" ] && grep -q "|$principal_sid|" "$users_file" 2>/dev/null; then
+        echo "User"
+        return 0
+    fi
+    
+    if [ -f "$groups_file" ] && grep -q "|$principal_sid|" "$groups_file" 2>/dev/null; then
+        echo "Group"
+        return 0
+    fi
+    
+    if [ -f "$computers_file" ] && grep -q "|$principal_sid|" "$computers_file" 2>/dev/null; then
+        echo "Computer"
+        return 0
+    fi
+    
+    case "$principal_sid" in
+        S-1-5-21-*-512|S-1-5-21-*-519|S-1-5-21-*-498) echo "Group" ;;
+        S-1-5-21-*-500) echo "User" ;;
+        S-1-5-21-*) echo "Group" ;;
+        S-1-5-32-*) echo "Group" ;;
+        S-1-5-9) echo "Group" ;;
+        S-1-5-18|S-1-5-19|S-1-5-20) echo "User" ;;
+        S-1-1-0) echo "Group" ;;
+        S-1-5-11) echo "Group" ;;
+        *) echo "Unknown" ;;
+    esac
+}
+
+build_aces_json() {
+    local object_id="$1"
+    local aces_file="/tmp/bashhound_aces_$$"
+    
+    if [ ! -f "$aces_file" ]; then
+        echo "[]"
+        return 0
+    fi
+    
+    local ace_objs=()
+    
+    while IFS='|' read -r obj_id obj_type principal_sid right_name is_inherited; do
+        if [ "$obj_id" = "$object_id" ] && [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+            local principal_type=$(resolve_principal_type "$principal_sid")
+            
+            local ace_json=$(cat <<ACEJSON
+{"PrincipalSID":"$principal_sid","PrincipalType":"$principal_type","RightName":"$right_name","IsInherited":$is_inherited}
+ACEJSON
+)
+            ace_objs+=("$ace_json")
+        fi
+    done < "$aces_file"
+    
+    if [ ${#ace_objs[@]} -gt 0 ]; then
+        echo "[$(IFS=,; echo "${ace_objs[*]}")]"
+    else
+        echo "[]"
+    fi
+}
+
 build_child_objects() {
     local parent_dn_upper="$1"
     
@@ -56,6 +121,8 @@ build_child_objects() {
     fi
 }
 
+# Crée plusieurs fichiers JSON séparés par type (format officiel BloodHound)
+# Ref: https://bloodhound.specterops.io/integrations/bloodhound-api/json-formats
 export_create_json_files() {
     local domain="$1"
     local output_prefix="$2"
@@ -147,6 +214,8 @@ export_create_json_files() {
                 [ -z "$last_logon_ts" ] && last_logon_ts="-1"
                 [ -z "$pwd_last_set" ] && pwd_last_set="-1"
                 
+                local aces_json=$(build_aces_json "$sid")
+                
                 users_data+=("$(cat <<USEREOF
 {
   "ObjectIdentifier": "$sid",
@@ -190,7 +259,7 @@ export_create_json_files() {
   "AllowedToDelegate": [],
   "HasSIDHistory": [],
   "SPNTargets": [],
-  "Aces": []
+  "Aces": $aces_json
 }
 USEREOF
 )")
@@ -229,7 +298,7 @@ EOF
                 local admin_count="${rest##*|}"
                 local temp="${rest%|*}"
                 local when_created="${temp##*|}"
-                temp="${temp%|*}"s
+                temp="${temp%|*}"
                 local description="${temp##*|}"
                 local members="${temp%|*}"
                 
@@ -272,6 +341,8 @@ EOF
                     fi
                 fi
                 
+                local aces_json=$(build_aces_json "$sid")
+                
                 groups_data+=("$(cat <<GROUPEOF
 {
   "ObjectIdentifier": "$sid",
@@ -289,7 +360,7 @@ EOF
     "samaccountname": "$sam"
   },
   "Members": $members_json,
-  "Aces": []
+  "Aces": $aces_json
 }
 GROUPEOF
 )")
@@ -382,6 +453,8 @@ EOF
                     fi
                 fi
                 
+                local aces_json=$(build_aces_json "$sid")
+                
                 computers_data+=("$(cat <<COMPEOF
 {
   "ObjectIdentifier": "$sid",
@@ -408,7 +481,7 @@ EOF
     "samaccountname": "$sam"
   },
   "PrimaryGroupSID": $primary_group_sid,
-  "Aces": [],
+  "Aces": $aces_json,
   "AllowedToDelegate": [],
   "AllowedToAct": [],
   "Status": null,
@@ -514,6 +587,7 @@ EOF
                         2) direction_name="Outbound" ;;
                         3) direction_name="Bidirectional" ;;
                     esac
+                    
                     local type_name="ParentChild"
                     if [ -n "$trust_type" ]; then
                         case "$trust_type" in
@@ -616,7 +690,7 @@ TRUSTEOF
       },
       "ChildObjects": $child_objects_json,
       "Trusts": $trusts_json,
-      "Aces": [],
+      "Aces": $(build_aces_json "$domain_sid"),
       "GPOChanges": {
         "LocalAdmins": [],
         "RemoteDesktopUsers": [],
@@ -664,6 +738,8 @@ EOF
                 
                 local gpcpath_escaped=$(echo "$gpcpath" | tr '[:lower:]' '[:upper:]' | sed 's/\\/\\\\/g')
                 
+                local aces_json=$(build_aces_json "$object_id")
+                
                 gpos_data+=("$(cat <<GPOEOF
 {
   "ObjectIdentifier": "$object_id",
@@ -679,7 +755,7 @@ EOF
     "gpcpath": "$gpcpath_escaped",
     "whencreated": -1
   },
-  "Aces": []
+  "Aces": $aces_json
 }
 GPOEOF
 )")
@@ -748,6 +824,8 @@ GPLINEOF
                 
                 local children_json=$(build_child_objects "$dn_upper")
                 
+                local aces_json=$(build_aces_json "$ou_guid")
+                
                 ous_data+=("$(cat <<OUEOF
 {
   "ObjectIdentifier": "$ou_guid",
@@ -765,7 +843,7 @@ GPLINEOF
   },
   "Links": $links_json,
   "ChildObjects": $children_json,
-  "Aces": [],
+  "Aces": $aces_json,
   "GPOChanges": {
     "LocalAdmins": [],
     "RemoteDesktopUsers": [],
@@ -815,6 +893,8 @@ EOF
                 
                 local children_json=$(build_child_objects "$dn_upper")
                 
+                local aces_json=$(build_aces_json "$container_guid")
+                
                 containers_data+=("$(cat <<CONTAINEREOF
 {
   "ObjectIdentifier": "$container_guid",
@@ -828,7 +908,7 @@ EOF
     "highvalue": false
   },
   "ChildObjects": $children_json,
-  "Aces": []
+  "Aces": $aces_json
 }
 CONTAINEREOF
 )")
@@ -1125,40 +1205,3 @@ export_add_ace() {
             ;;
     esac
 }
-
-export_to_bloodhound_json() {
-    local raw_data="$1"
-    local output_file="$2"
-    local domain="$3"
-    
-    echo "INFO: Export des données vers $output_file..." >&2
-    
-    local json=$(export_create_base_json "$domain")
-    
-    # Parse les données brutes et ajoute au JSON
-    # TODO: Parser les données LDAP hexadécimales et extraire les informations
-    # Pour l'instant, on crée juste un exemple
-    
-    json=$(export_add_domain "$json" "$domain" "S-1-5-21-XXX-XXX-XXX")
-    
-    echo "$json" | jq '.' > "$output_file"
-    
-    local count=$(echo "$json" | jq '.meta.count')
-    echo "INFO: Export terminé - $count objets exportés" >&2
-}
-
-export_parse_and_export() {
-    local raw_data_file="$1"
-    local output_file="$2"
-    local domain="$3"
-    
-    if [ ! -f "$raw_data_file" ]; then
-        echo "ERROR: Fichier de données brutes introuvable: $raw_data_file" >&2
-        return 1
-    fi
-    
-    local raw_data=$(cat "$raw_data_file")
-    export_to_bloodhound_json "$raw_data" "$output_file" "$domain"
-}
-
-

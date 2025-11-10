@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# bashhound - Script principal
-# Alternative à SharpHound écrite en bash pur
+# BashHound - by 0xbbuddha
+# Active Directory data collector for BloodHound written in Bash - Alternative to SharpHound and RutHound
 
-# Désactivé pour permettre au script de continuer en cas d'erreurs LDAP
+# Disabled to allow the script to continue in case of LDAP errors
 # set -euo pipefail
 # set -u
 
@@ -141,8 +141,8 @@ parse_arguments() {
 }
 
 show_banner() {
-    local bashhound_color='\033[38;2;0;229;142m'      # #00E58E (vert cyan)
-    local author_color='\033[38;2;207;51;246m'        # #CF33F6 (rose/magenta)
+    local bashhound_color='\033[38;2;0;229;142m'
+    local author_color='\033[38;2;207;51;246m'
     local reset='\033[0m'
     
     echo -e "${bashhound_color}    ____             __    __  __                      __${reset}"
@@ -310,7 +310,7 @@ main() {
         if command -v zip >/dev/null 2>&1; then
             zip -q "$zip_filename" "${created_files[@]}" 2>/dev/null
             if [ $? -eq 0 ]; then
-                local bashhound_color='\033[38;2;0;229;142m'      # #00E58E (vert cyan)
+                local bashhound_color='\033[38;2;0;229;142m'
                 local reset='\033[0m'
                 echo "[$(date '+%Y-%m-%dT%H:%M:%S')] $users_count users parsed!"
                 echo "[$(date '+%Y-%m-%dT%H:%M:%S')] $groups_count groups parsed!"
