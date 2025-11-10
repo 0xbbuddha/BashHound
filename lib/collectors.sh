@@ -6,6 +6,7 @@ readonly _COLLECTORS_SH_LOADED=1
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$LIB_DIR/ldap.sh"
 source "$LIB_DIR/ldap_parser.sh"
+source "$LIB_DIR/acl_parser.sh"
 
 DOMAIN_NAME=""
 DOMAIN_DN=""
@@ -19,8 +20,9 @@ COLLECTED_GPOS="/tmp/bashhound_gpos_$$"
 COLLECTED_OUS="/tmp/bashhound_ous_$$"
 COLLECTED_CONTAINERS="/tmp/bashhound_containers_$$"
 COLLECTED_TRUSTS="/tmp/bashhound_trusts_$$"
+COLLECTED_ACES="/tmp/bashhound_aces_$$"
 
-trap 'rm -f "$COLLECTED_USERS" "$COLLECTED_GROUPS" "$COLLECTED_COMPUTERS" "$COLLECTED_DOMAINS" "$COLLECTED_GPOS" "$COLLECTED_OUS" "$COLLECTED_CONTAINERS" "$COLLECTED_TRUSTS" 2>/dev/null' EXIT
+trap 'rm -f "$COLLECTED_USERS" "$COLLECTED_GROUPS" "$COLLECTED_COMPUTERS" "$COLLECTED_DOMAINS" "$COLLECTED_GPOS" "$COLLECTED_OUS" "$COLLECTED_CONTAINERS" "$COLLECTED_TRUSTS" "$COLLECTED_ACES" 2>/dev/null' EXIT
 
 collector_init_domain() {
     local domain="$1"
@@ -28,21 +30,38 @@ collector_init_domain() {
     
     DOMAIN_DN=$(echo "$domain" | sed 's/\./,DC=/g' | sed 's/^/DC=/')
     
+    > "$COLLECTED_ACES"
+    
     echo "INFO: Domaine initialisé - $DOMAIN_NAME ($DOMAIN_DN)" >&2
 }
 
 collect_domain_info() {
     echo "INFO: Collecte des informations du domaine..." >&2
     
-    local results=$(ldap_search "$DOMAIN_DN" 0 "(objectClass=domain)" "objectSid,name,distinguishedName")
+    local results=$(ldap_search "$DOMAIN_DN" 0 "(objectClass=domain)" "objectSid,name,distinguishedName,nTSecurityDescriptor")
     
     if [ -z "$results" ]; then
         echo "WARN: Aucune information de domaine trouvée" >&2
         return 1
     fi
     
-    # TODO: Parser le SID depuis la réponse LDAP
-    DOMAIN_SID="S-1-5-21-XXXXXXXXXX-XXXXXXXXXX-XXXXXXXXXX"
+    while IFS= read -r line; do
+        if [ -n "$line" ] && [[ "$line" =~ ^308 ]]; then
+            local sid=$(extract_sid_from_response "$line")
+            if [ -n "$sid" ]; then
+                DOMAIN_SID="$sid"
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$sid|Domain|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                fi
+            fi
+        fi
+    done <<< "$results"
     
     echo "$results"
 }
@@ -51,7 +70,7 @@ collect_users() {
     echo "INFO: Collecte des utilisateurs..." >&2
     
     local filter="(objectClass=user)"
-    local attributes="distinguishedName,sAMAccountName,objectSid,primaryGroupID,userAccountControl,servicePrincipalName,lastLogon,lastLogontimestamp,pwdLastSet,whenCreated,description,adminCount"
+    local attributes="distinguishedName,sAMAccountName,objectSid,primaryGroupID,userAccountControl,servicePrincipalName,lastLogon,lastLogontimestamp,pwdLastSet,whenCreated,description,adminCount,nTSecurityDescriptor"
     
     local results=$(ldap_search "$DOMAIN_DN" 2 "$filter" "$attributes")
     
@@ -98,8 +117,21 @@ collect_users() {
                 sid="S-1-5-21-0-0-$count"
             fi
             
-            if [ -n "$dn" ]; then
+            if [ -n "$dn" ] && [ -n "$sid" ]; then
                 echo "$dn|$sam|$sid|$primary_gid|$description|$when_created|$last_logon|$last_logon_ts|$pwd_last_set|$uac|$admin_count|$spns" >> "$COLLECTED_USERS"
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    [ "$LDAP_DEBUG" = "true" ] && echo "DEBUG: Found $(echo "$aces" | wc -l) ACEs for user $sam" >&2
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$sid|User|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                else
+                    [ "$LDAP_DEBUG" = "true" ] && echo "DEBUG: No ACEs found for user $sam (line length: ${#line})" >&2
+                fi
+                
                 ((count++))
             fi
         fi
@@ -112,7 +144,7 @@ collect_groups() {
     echo "INFO: Collecte des groupes..." >&2
     
     local filter="(objectClass=group)"
-    local attributes="distinguishedName,sAMAccountName,objectSid,member,memberOf,adminCount,description,whenCreated"
+    local attributes="distinguishedName,sAMAccountName,objectSid,member,memberOf,adminCount,description,whenCreated,nTSecurityDescriptor"
     
     local results=$(ldap_search "$DOMAIN_DN" 2 "$filter" "$attributes")
     
@@ -155,8 +187,18 @@ collect_groups() {
                 total_members=$((total_members + member_count))
             fi
             
-            if [ -n "$dn" ]; then
+            if [ -n "$dn" ] && [ -n "$sid" ]; then
                 echo "$dn|$sam|$sid|$members|$description|$when_created|$admin_count" >> "$COLLECTED_GROUPS"
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$sid|Group|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                fi
+                
                 ((count++))
             fi
         fi
@@ -169,7 +211,7 @@ collect_computers() {
     echo "INFO: Collecte des ordinateurs..." >&2
     
     local filter="(objectClass=computer)"
-    local attributes="distinguishedName,sAMAccountName,dNSHostName,objectSid,operatingSystem,servicePrincipalName,userAccountControl,lastLogon,lastLogontimestamp,pwdLastSet,whenCreated,description,primaryGroupID"
+    local attributes="distinguishedName,sAMAccountName,dNSHostName,objectSid,operatingSystem,servicePrincipalName,userAccountControl,lastLogon,lastLogontimestamp,pwdLastSet,whenCreated,description,primaryGroupID,nTSecurityDescriptor"
     
     local results=$(ldap_search "$DOMAIN_DN" 2 "$filter" "$attributes")
     
@@ -206,8 +248,18 @@ collect_computers() {
                 sid="S-1-5-21-0-0-$count"
             fi
             
-            if [ -n "$dn" ]; then
+            if [ -n "$dn" ] && [ -n "$sid" ]; then
                 echo "$dn|$sam|$sid|$primary_gid|$description|$operating_system|$when_created|$last_logon|$last_logon_ts|$pwd_last_set|$uac|$spns" >> "$COLLECTED_COMPUTERS"
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$sid|Computer|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                fi
+                
                 ((count++))
             fi
         fi
@@ -221,7 +273,7 @@ collect_gpos() {
     
     local gpo_container="CN=Policies,CN=System,$DOMAIN_DN"
     local filter="(objectClass=groupPolicyContainer)"
-    local attributes="distinguishedName,name,displayName,gPCFileSysPath,whenCreated,description"
+    local attributes="distinguishedName,name,displayName,gPCFileSysPath,whenCreated,description,nTSecurityDescriptor"
     
     local results=$(ldap_search "$gpo_container" 2 "$filter" "$attributes")
     
@@ -248,6 +300,19 @@ collect_gpos() {
             
             if [ -n "$dn" ]; then
                 echo "$dn|$name|$displayname|$gpcpath|$guid" >> "$COLLECTED_GPOS"
+                
+                local dn_upper=$(echo "$dn" | tr '[:lower:]' '[:upper:]')
+                local object_id=$(echo -n "$dn_upper" | md5sum | awk '{print toupper($1)}' | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$object_id|GPO|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                fi
+                
                 ((count++))
             fi
         fi
@@ -260,7 +325,7 @@ collect_ous() {
     echo "INFO: Collecte des OUs..." >&2
     
     local filter="(objectClass=organizationalUnit)"
-    local attributes="distinguishedName,name,gPLink,gPOptions,description,whenCreated"
+    local attributes="distinguishedName,name,gPLink,gPOptions,description,whenCreated,nTSecurityDescriptor"
     
     local results=$(ldap_search "$DOMAIN_DN" 2 "$filter" "$attributes")
     
@@ -291,6 +356,19 @@ collect_ous() {
             
             if [ -n "$dn" ]; then
                 echo "$dn|$name|$gplink|$blocks_inheritance|$description" >> "$COLLECTED_OUS"
+                
+                local dn_upper=$(echo "$dn" | tr '[:lower:]' '[:upper:]')
+                local object_id=$(echo -n "$dn_upper" | md5sum | awk '{print toupper($1)}' | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
+                
+                local aces=$(extract_aces_from_ldap_response "$line")
+                if [ -n "$aces" ]; then
+                    while IFS='|' read -r principal_sid right_name is_inherited; do
+                        if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                            echo "$object_id|OU|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                        fi
+                    done <<< "$aces"
+                fi
+                
                 ((count++))
             fi
         fi
@@ -359,7 +437,7 @@ collect_containers() {
     for container_base in "${container_names[@]}"; do
         local container_dn="${container_base},$DOMAIN_DN"
         local filter="(objectClass=container)"
-        local attributes="distinguishedName,name,description,whenCreated"
+        local attributes="distinguishedName,name,description,whenCreated,nTSecurityDescriptor"
         
         local results=$(ldap_search "$container_dn" 0 "(objectClass=*)" "$attributes")
         
@@ -376,6 +454,19 @@ collect_containers() {
                     
                     if [ -n "$dn" ]; then
                         echo "$dn|$name|$description" >> "$COLLECTED_CONTAINERS"
+                        
+                        local dn_upper=$(echo "$dn" | tr '[:lower:]' '[:upper:]')
+                        local object_id=$(echo -n "$dn_upper" | md5sum | awk '{print toupper($1)}' | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
+                        
+                        local aces=$(extract_aces_from_ldap_response "$line")
+                        if [ -n "$aces" ]; then
+                            while IFS='|' read -r principal_sid right_name is_inherited; do
+                                if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                                    echo "$object_id|Container|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                                fi
+                            done <<< "$aces"
+                        fi
+                        
                         ((count++))
                     fi
                 fi
@@ -397,6 +488,19 @@ collect_containers() {
                     
                     if [ -n "$dn" ]; then
                         echo "$dn|$name|$description" >> "$COLLECTED_CONTAINERS"
+                        
+                        local dn_upper=$(echo "$dn" | tr '[:lower:]' '[:upper:]')
+                        local object_id=$(echo -n "$dn_upper" | md5sum | awk '{print toupper($1)}' | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
+                        
+                        local aces=$(extract_aces_from_ldap_response "$line")
+                        if [ -n "$aces" ]; then
+                            while IFS='|' read -r principal_sid right_name is_inherited; do
+                                if [ -n "$principal_sid" ] && [ -n "$right_name" ]; then
+                                    echo "$object_id|Container|$principal_sid|$right_name|$is_inherited" >> "$COLLECTED_ACES"
+                                fi
+                            done <<< "$aces"
+                        fi
+                        
                         ((count++))
                     fi
                 fi
@@ -406,102 +510,3 @@ collect_containers() {
     
     echo "INFO: $count containers collectés et parsés" >&2
 }
-
-collect_acls() {
-    local object_dn="$1"
-    
-    local attributes="nTSecurityDescriptor"
-    local results=$(ldap_search "$object_dn" 0 "(objectClass=*)" "$attributes")
-    
-    echo "$results"
-}
-
-parse_security_descriptor() {
-    local sd_hex="$1"
-    
-    # Format du Security Descriptor (très simplifié):
-    # - Revision (1 byte)
-    # - Control flags (2 bytes)
-    # - Owner SID offset (4 bytes)
-    # - Group SID offset (4 bytes)
-    # - SACL offset (4 bytes)
-    # - DACL offset (4 bytes)
-    # Puis les structures SID et ACL
-    
-    # TODO: Implémenter le parsing complet
-    echo "TODO: Parse Security Descriptor"
-}
-
-convert_sid_to_text() {
-    local sid_hex="$1"
-    
-    # Format SID:
-    # - Revision (1 byte)
-    # - SubAuthorityCount (1 byte)
-    # - Authority (6 bytes, big-endian)
-    # - SubAuthorities (4 bytes each, little-endian)
-    
-    # TODO: Implémenter la conversion
-    echo "S-1-5-21-XXX-XXX-XXX"
-}
-
-convert_guid_to_text() {
-    local guid_hex="$1"
-    
-    if [ ${#guid_hex} -ne 32 ]; then
-        echo "00000000-0000-0000-0000-000000000000"
-        return
-    fi
-    
-    local part1=$(echo "${guid_hex:6:2}${guid_hex:4:2}${guid_hex:2:2}${guid_hex:0:2}")
-    local part2=$(echo "${guid_hex:10:2}${guid_hex:8:2}")
-    local part3=$(echo "${guid_hex:14:2}${guid_hex:12:2}")
-    local part4=$(echo "${guid_hex:16:4}")
-    local part5=$(echo "${guid_hex:20:12}")
-    
-    echo "${part1}-${part2}-${part3}-${part4}-${part5}"
-}
-
-collect_all_data() {
-    local domain="$1"
-    local output_file="$2"
-    
-    collector_init_domain "$domain"
-    
-    echo "INFO: Début de la collecte de toutes les données..." >&2
-    
-    local domain_data=$(collect_domain_info)
-    local users_data=$(collect_users)
-    local groups_data=$(collect_groups)
-    local computers_data=$(collect_computers)
-    local gpos_data=$(collect_gpos)
-    local ous_data=$(collect_ous)
-    local trusts_data=$(collect_trusts)
-    
-    echo "INFO: Collecte terminée" >&2
-    
-    cat <<EOF
-DOMAIN_DATA:
-$domain_data
-
-USERS_DATA:
-$users_data
-
-GROUPS_DATA:
-$groups_data
-
-COMPUTERS_DATA:
-$computers_data
-
-GPOS_DATA:
-$gpos_data
-
-OUS_DATA:
-$ous_data
-
-TRUSTS_DATA:
-$trusts_data
-EOF
-}
-
-

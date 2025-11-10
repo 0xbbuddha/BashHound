@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# ldap.sh - Implémentation du protocole LDAP en bash pur
+# RFC 4511 - Lightweight Directory Access Protocol (LDAP)
+
 [[ -n "${_LDAP_SH_LOADED:-}" ]] && return 0
 readonly _LDAP_SH_LOADED=1
 
@@ -81,7 +84,7 @@ ldap_connect_tls() {
     local fifo_out="/tmp/bashhound_ldaps_out_$$"
     
     mkfifo "$fifo_in" "$fifo_out" 2>/dev/null
-    
+
     openssl s_client -quiet -connect "$host:$port" -ign_eof < "$fifo_in" > "$fifo_out" 2>/dev/null &
     LDAP_OPENSSL_PID=$!
     
@@ -277,9 +280,10 @@ ldap_receive_message() {
 ldap_create_message() {
     local message_id=$1
     local protocol_op="$2"
+    local controls="${3:-}"  # Optionnel
     
     local message_id_encoded=$(asn1_encode_integer "$message_id")
-    local message_content="${message_id_encoded}${protocol_op}"
+    local message_content="${message_id_encoded}${protocol_op}${controls}"
     
     asn1_encode_sequence "$message_content"
 }
@@ -360,6 +364,7 @@ ldap_search() {
     local scope="${2:-2}"
     local filter="${3:-(&(objectClass=*))}"
     local attributes="${4:-*}"
+    local use_sd_flags="${5:-false}"
     
     echo "INFO: Recherche LDAP - Base: $base_dn, Filter: $filter" >&2
     
@@ -382,9 +387,27 @@ ldap_search() {
     local search_request="${base_encoded}${scope_encoded}${deref_encoded}${size_limit_encoded}${time_limit_encoded}${types_only_encoded}${filter_encoded}${attrs_encoded}"
     local search_request_msg=$(asn1_encode_sequence_with_tag 0x63 "$search_request")
     
-    local ldap_message=$(ldap_create_message "$LDAP_MESSAGE_ID" "$search_request_msg")
+    local controls=""
+    if [ "$use_sd_flags" = "true" ] || [[ "$attributes" == *"nTSecurityDescriptor"* ]]; then
+        
+        local oid="1.2.840.113556.1.4.801"
+        local oid_encoded=$(asn1_encode_octet_string "$oid")
+        local flags_int=$(asn1_encode_integer 7)
+        local value_seq=$(asn1_encode_sequence "$flags_int")
+        local value_encoded=$(asn1_encode_octet_string_hex "$value_seq")
+        local control=$(asn1_encode_sequence "${oid_encoded}${value_encoded}")
+        controls=$(asn1_encode_sequence_with_tag 0xa0 "$control")
+    fi
+    
+    local ldap_message=$(ldap_create_message "$LDAP_MESSAGE_ID" "$search_request_msg" "$controls")
     local current_msg_id=$LDAP_MESSAGE_ID
     ((LDAP_MESSAGE_ID++))
+    
+    if [ -n "$controls" ]; then
+        echo "DEBUG: Sending LDAP message with controls" >&2
+        echo "DEBUG: Message length: $((${#ldap_message} / 2)) bytes" >&2
+        echo "DEBUG: First 200 chars: ${ldap_message:0:200}" >&2
+    fi
     
     ldap_send_message "$ldap_message"
     
