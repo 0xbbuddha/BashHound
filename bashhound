@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # BashHound - by 0xbbuddha
-# Active Directory data collector for BloodHound written in Bash - Alternative to SharpHound and RutHound
+# Active Directory data collector for BloodHound written in Bash - Alternative to SharpHound and RustHound
 
 # Disabled to allow the script to continue in case of LDAP errors
 # set -euo pipefail
