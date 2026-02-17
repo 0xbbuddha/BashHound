@@ -33,9 +33,14 @@ Options obligatoires:
     -d, --domain DOMAIN          Domaine Active Directory (ex: domain.local)
     -u, --user USERNAME          Nom d'utilisateur
     -p, --password PASSWORD      Mot de passe
+
+Options serveur (recommandé si pas d'auto-détection DNS):
     -s, --server SERVER          Serveur LDAP / Domain Controller
+    -f, --ldapfqdn FQDN          Alias de -s
 
 Options facultatives:
+    -s, --server SERVER          Serveur LDAP / DC (auto-détecté via DNS SRV si absent)
+    -f, --ldapfqdn FQDN          Alias de -s (serveur LDAP / DC)
     -o, --output FILE            Fichier de sortie (défaut: bloodhound_TIMESTAMP.json)
     -c, --collection METHOD      Méthode de collection (défaut: All)
                                  Valeurs: All, DCOnly, Session, LoggedOn, Trusts, ACL, Group
@@ -44,6 +49,7 @@ Options facultatives:
     --ldaps                      Utilise LDAPS (TLS) - équivalent à --port 636
     --no-tls                     Force LDAP sans TLS même sur port 636
     -v, --verbose                Mode verbeux (affiche tous les messages)
+    -V, --version                Affiche la version
     -h, --help                   Affiche cette aide
 
 Exemples:
@@ -87,6 +93,10 @@ parse_arguments() {
                 LDAP_SERVER="$2"
                 shift 2
                 ;;
+            -f|--ldapfqdn)
+                LDAP_SERVER="$2"
+                shift 2
+                ;;
             -o|--output)
                 OUTPUT_FILE="$2"
                 shift 2
@@ -117,6 +127,11 @@ parse_arguments() {
                 USE_LDAPS=false
                 shift
                 ;;
+            -V|--version)
+                echo "BashHound version 1.0"
+                echo "by @0xbbuddha"
+                exit 0
+                ;;
             -h|--help)
                 show_usage
                 exit 0
@@ -129,8 +144,8 @@ parse_arguments() {
         esac
     done
     
-    if [ -z "$DOMAIN" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ] || [ -z "$LDAP_SERVER" ]; then
-        echo "[$(date '+%Y-%m-%dT%H:%M:%S')] ERROR: Tous les paramètres obligatoires doivent être fournis" >&2
+    if [ -z "$DOMAIN" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+        echo "[$(date '+%Y-%m-%dT%H:%M:%S')] ERROR: Les paramètres -d (domaine), -u (utilisateur) et -p (mot de passe) sont obligatoires" >&2
         show_usage
         exit 1
     fi
@@ -162,6 +177,14 @@ main() {
     
     if [ "$LDAP_PORT" = "636" ] && [ "$USE_LDAPS" = "false" ]; then
         USE_LDAPS=true
+    fi
+    
+    # Auto-détection du serveur LDAP (DC) si non fourni
+    if [ -z "$LDAP_SERVER" ]; then
+        LDAP_SERVER=$(host -t SRV "_ldap._tcp.$DOMAIN" 2>/dev/null | grep "has SRV record" | head -1 | awk '{print $NF}' | sed 's/\.$//')
+        if [ -z "$LDAP_SERVER" ]; then
+            LDAP_SERVER="$DOMAIN"
+        fi
     fi
     
     local protocol="LDAP"
@@ -328,6 +351,11 @@ main() {
                 echo "[$(date '+%Y-%m-%dT%H:%M:%S')] $zip_filename created!"
                 echo ""
                 echo -e "${bashhound_color}BashHound${reset} Enumeration Completed at $(date '+%H:%M:%S on %m/%d/%y')! Happy Graphing!"
+                
+                # Nettoyage des fichiers temporaires de collection
+                rm -f "/tmp/bashhound_users_$$" "/tmp/bashhound_groups_$$" "/tmp/bashhound_computers_$$" \
+                      "/tmp/bashhound_domains_$$" "/tmp/bashhound_gpos_$$" "/tmp/bashhound_ous_$$" \
+                      "/tmp/bashhound_containers_$$" "/tmp/bashhound_trusts_$$" "/tmp/bashhound_aces_$$" 2>/dev/null
                 
                 if [ "$ZIP_ONLY" = "true" ]; then
                     rm -f "${created_files[@]}"
