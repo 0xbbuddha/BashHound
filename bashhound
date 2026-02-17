@@ -31,16 +31,12 @@ Usage: $0 [options]
 
 Options obligatoires:
     -d, --domain DOMAIN          Domaine Active Directory (ex: domain.local)
-    -u, --user USERNAME          Nom d'utilisateur
-    -p, --password PASSWORD      Mot de passe
-
-Options serveur (recommandé si pas d'auto-détection DNS):
-    -s, --server SERVER          Serveur LDAP / Domain Controller
-    -f, --ldapfqdn FQDN          Alias de -s
 
 Options facultatives:
-    -s, --server SERVER          Serveur LDAP / DC (auto-détecté via DNS SRV si absent)
-    -f, --ldapfqdn FQDN          Alias de -s (serveur LDAP / DC)
+    -u, --ldapuser USERNAME          Nom d'utilisateur
+    -p, --ldappassword PASSWORD      Mot de passe utilisateur
+    -f, --ldapfqdn FQDN          Serveur LDAP / Domain Controller
+    -s, --server SERVER          Alias de -f (rétrocompatibilité)
     -o, --output FILE            Fichier de sortie (défaut: bloodhound_TIMESTAMP.json)
     -c, --collection METHOD      Méthode de collection (défaut: All)
                                  Valeurs: All, DCOnly, Session, LoggedOn, Trusts, ACL, Group
@@ -51,17 +47,6 @@ Options facultatives:
     -v, --verbose                Mode verbeux (affiche tous les messages)
     -V, --version                Affiche la version
     -h, --help                   Affiche cette aide
-
-Exemples:
-    # LDAP standard (port 389)
-    $0 -d domain.local -u administrator -p Password123 -s dc01.domain.local
-    
-    # LDAPS avec TLS (port 636)
-    $0 -d domain.local -u administrator -p Password123 -s dc01.domain.local --ldaps
-    $0 -d corp.local -u admin -p Pass123! -s 192.168.1.10 --port 636
-    
-    # Avec options avancées
-    $0 -d corp.local -u user@corp.local -p Pass123! -s 192.168.1.10 --ldaps -o data.json
 
 Collection Methods:
     All       - Collecte toutes les données (par défaut)
@@ -81,19 +66,19 @@ parse_arguments() {
                 DOMAIN="$2"
                 shift 2
                 ;;
-            -u|--user)
+            -u|--ldapuser)
                 USERNAME="$2"
                 shift 2
                 ;;
-            -p|--password)
+            -p|--ldappassword)
                 PASSWORD="$2"
                 shift 2
                 ;;
-            -s|--server)
+            -f|--ldapfqdn)
                 LDAP_SERVER="$2"
                 shift 2
                 ;;
-            -f|--ldapfqdn)
+            -s|--server)
                 LDAP_SERVER="$2"
                 shift 2
                 ;;
@@ -144,9 +129,10 @@ parse_arguments() {
         esac
     done
     
-    if [ -z "$DOMAIN" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
-        echo "[$(date '+%Y-%m-%dT%H:%M:%S')] ERROR: Les paramètres -d (domaine), -u (utilisateur) et -p (mot de passe) sont obligatoires" >&2
-        show_usage
+    if [ -z "$DOMAIN" ]; then
+        echo "[$(date '+%Y-%m-%dT%H:%M:%S')] ERROR: Le paramètre -d (domaine) est obligatoire" >&2
+        echo "" >&2
+        echo "Pour plus d'informations, utilisez '--help'." >&2
         exit 1
     fi
     
